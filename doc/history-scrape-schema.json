@@ -1,0 +1,34 @@
+{
+  "description": "Summarizes all relevant changes that occurred in a set of update patches.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": [ "id", "url", "date", "champions" ],
+    "properties": {
+      "id": { "type": "string" },
+      "url": { "type": "string" },
+      "date": { "type": "string" },
+      "champions": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [ "name", "changes" ],
+          "properties": {
+            "name": { "type": "string" },
+            "changes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [ "about", "lines" ],
+                "properties": {
+                  "about": { "type": "array", "items": { "type": "string" } },
+                  "lines": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
