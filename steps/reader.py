@@ -12,8 +12,7 @@ class PatchHistoryReader:
     def to_df(self):
         with jsonlines.open(self.fp) as reader:
             data = chain.from_iterable(map(self.parse_patch, reader))
-            df = pd.DataFrame(data, columns=(
-                "patch", "date", "champion", "about", "text"))
+            df = pd.DataFrame(data, columns=("patch", "date", "champion", "about", "text"))
             return df
 
     def parse_patch(self, obj):
@@ -35,7 +34,32 @@ class PatchHistoryReader:
 
 class PlayHistoryReader:
 
-    pass
+    def __init__(self, fp):
+        self.fp = fp
+
+    def to_df(self):
+        with jsonlines.open(self.fp) as reader:
+            data = chain.from_iterable([(champ['champion'], *t) for t in self.parse_champion(champ)]
+                for champ in reader)
+            df = pd.DataFrame(data, columns=("champion", "date", "popularity", "winrate", "banrate"))
+            return df
+
+    def to_dict(self):
+        with jsonlines.open(self.fp) as reader:
+            data = {champ['champion']: list(self.parse_champion(champ))
+                for champ in reader}
+            return data
+
+    def parse_champion(self, champion):
+        cols = (self.parse_history(champion[col], i==0)
+            for i, col in enumerate(["popularity", "winrate", "banrate"]))
+        return ((pop[0], pop[1], win, ban) for pop, win, ban in zip(*cols))
+
+    def parse_history(self, history, with_date=False):
+        if with_date:
+            return ((datetime.fromisoformat(t), x/100) for t, x in history)
+        else:
+            return (x/100 for _, x in history)
 
 class ReleaseReader:
 
@@ -49,9 +73,4 @@ class ReleaseReader:
 
     def to_dict(self):
         df = self.to_df()
-        cols = set(df.columns) - {'champion'}
-        if len(cols) > 1:
-            return {row['champion']: {k: v for k, v in row.items() if k in cols}
-                for _, row in df.iterrows()}
-        else:
-            return {row['champion']: row['release'] for _, row in df.iterrows()}
+        return {row['champion']: row['release'] for _, row in df.iterrows()}
