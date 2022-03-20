@@ -22,9 +22,9 @@ class HistoryCombiner(BaseEstimator, TransformerMixin):
             .drop('patch', axis=1)\
             .sort_values(by=['champion', 'date'])
         min_date, max_date = self.play_df['date'].min(), X['date'].max()
-        X_ = X_[(min_date <= X_['date']) & (X_['date'] <= max_date)].reset_index(drop=True)
-        return self.with_total_skins(self.fill_play(X_))\
+        X_ =  self.with_total_skins(self.fill_play(X_))\
             .dropna(axis=0).reset_index(drop=True)
+        return X_[(min_date <= X_['date']) & (X_['date'] <= max_date)].reset_index(drop=True)
 
     def group_skins(self, dates):
         return self.with_patch_date(dates, self.skins_df, 'release')\
