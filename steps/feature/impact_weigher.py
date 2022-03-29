@@ -1,13 +1,38 @@
+from collections import namedtuple
 from functools import reduce
 from itertools import chain
 from math import floor, log10
+from scipy.stats import gmean
 from sklearn.base import BaseEstimator, TransformerMixin
+import numpy as np
 import re
+
+def log_scale_tuples(v):
+    if not v:
+        return v
+    m = min(min(abs(a), abs(b)) for a, b in v)
+    e = 10 ** floor(log10(m)) if m > 0 else 1
+    return ((a/e, b/e) for a, b in v)
+
+def log_scale(x):
+    m = abs(x)
+    e = 10 ** floor(log10(m)) if m > 0 else 1
+    return x / e
+
+DiffCalc = namedtuple('DiffCalc', ['diff', 'reducer'])
+sumDiff = DiffCalc(lambda a, b: b-a, np.mean)
+mulDiff = DiffCalc(lambda a, b: b/a if a != 0 else b, lambda s: gmean([x for x in s if x]))
+
+DiffScaling = namedtuple('DiffScaling', ['prescale', 'scale', 'postscale'])
+logScaling = DiffScaling(log_scale_tuples, lambda v: v, log_scale)
+binScaling = DiffScaling(lambda v: v, lambda v: v, lambda x: x/abs(x) if x != 0 else 0)
 
 class ImpactWeigher(BaseEstimator, TransformerMixin):
 
-    def __init__(self, w=1.0):
+    def __init__(self, w=1.0, diff=sumDiff, scaling=logScaling):
         self.w = w
+        self.diff = diff
+        self.scaling = scaling
 
     def fit(self, X, y=None):
         return self
@@ -62,7 +87,8 @@ class ImpactWeigher(BaseEstimator, TransformerMixin):
     def __parse_part(self, s):
         if ' x ' in s:
             return 'mul', self.__float(re.search(self.__re_N('N'), s).group(0))
-        if (m := re.search(self.__re_N(r"^\s*[\(\)]*(N)\s\w[\s\w']*[\(\)]*\s*$"), s)):
+        m = re.search(self.__re_N(r"^\s*[\(\)]*(N)\s\w[\s\w']*[\(\)]*\s*$"), s)
+        if m:
             return 'scl', self.__float(m.group(1))
         return 'val', [self.__float(m) for m in re.findall(self.__re_N('N'), s)]
 
@@ -77,15 +103,16 @@ class ImpactWeigher(BaseEstimator, TransformerMixin):
         text = row['text']
         impact = row['impact']
         if val_from is None:
-            return self.__measure_no_number(impact, text)
-        d = self.__measure_number(val_from, val_to)
+            d = self.__measure_no_number(text)
+        else:
+            d = self.__measure_number(val_from, val_to)
         return impact * d
 
-    def __measure_no_number(self, impact, text):
+    def __measure_no_number(self, text):
         m = 1
         if re.search(r'no longer|removed:|removed effect:', text, re.I):
             m = -1
-        return self.w * impact * m
+        return self.w * m
 
     def __measure_number(self, a_, b_):
         ts = ('val', 'scl', 'mul')
@@ -93,28 +120,15 @@ class ImpactWeigher(BaseEstimator, TransformerMixin):
         b = {t: [v for k, v in b_ if k == t] for t in ts}
         a['val'] = self.__merge_vals(a['val'])
         b['val'] = self.__merge_vals(b['val'])
-        zips = (
+        zippeds = (
             self.__unaligned_zip(a['val'], b['val']),
             self.__exceeding_zip(a['scl'], b['scl']),
             self.__exceeding_zip(a['mul'], b['mul'])
         )
-        diffs = list(chain.from_iterable(
-            (b-a for a, b in self.__normalize_ts(z)) for z in zips
-        ))
-        return self.__normalize(reduce(lambda a,b:a+b, diffs, 0) / len(diffs))
-
-    def __normalize_ts(self, v):
-        v = list(v)
-        if not v:
-            return v
-        m = min(min(abs(a), abs(b)) for a, b in v)
-        e = 10 ** floor(log10(m)) if m > 0 else 1
-        return ((a/e, b/e) for a, b in v)
-
-    def __normalize(self, x):
-        m = abs(x)
-        e = 10 ** floor(log10(m)) if m > 0 else 1
-        return x / e
+        prescaled = (self.scaling.prescale(list(z)) for z in zippeds)
+        diffs = chain.from_iterable((self.diff.diff(*t) for t in ts) for ts in prescaled)
+        scaled = list(self.scaling.scale(diffs))
+        return self.scaling.postscale(self.diff.reducer(scaled))
 
     def __merge_vals(self, vals):
         def merge(acc, val):

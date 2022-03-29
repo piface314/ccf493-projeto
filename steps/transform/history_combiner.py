@@ -1,3 +1,4 @@
+import pandas
 from sklearn.base import BaseEstimator, TransformerMixin
 import numpy as np
 
@@ -22,7 +23,7 @@ class HistoryCombiner(BaseEstimator, TransformerMixin):
             .drop('patch', axis=1)\
             .sort_values(by=['champion', 'date'])
         min_date, max_date = self.play_df['date'].min(), X['date'].max()
-        X_ =  self.with_total_skins(self.fill_play(X_))\
+        X_ = self.with_total_skins(self.fill_play(X_))\
             .dropna(axis=0).reset_index(drop=True)
         return X_[(min_date <= X_['date']) & (X_['date'] <= max_date)].reset_index(drop=True)
 
@@ -37,9 +38,11 @@ class HistoryCombiner(BaseEstimator, TransformerMixin):
             .agg(self.play_metrics_agg)
 
     def with_patch_date(self, dates, df, key):
+        def upper_bound(x):
+            ub = self.upper_bound(x, dates)
+            return dates[ub] if 0 <= ub < len(dates) else None
         bounds_df = df.copy()
-        bounds_df['date'] = df[key]\
-            .apply(self.upper_bound, args=(dates,))
+        bounds_df['date'] = df[key].apply(upper_bound)
         return bounds_df
 
     def upper_bound(self, x, dates):
@@ -50,18 +53,28 @@ class HistoryCombiner(BaseEstimator, TransformerMixin):
                 r = m
             else:
                 l = m + 1
-        return dates[l] if 0 <= l < len(dates) else None
+        return l
 
-    def fill_play(self, X):
-        n = len(X) - 1
-        def fill(row, col):
-            if not np.isnan(row[col]):
-                return row[col]
-            i, c = row['index'], row['champion']
-            if i > 0 and X.iloc[i-1]['champion'] == c and i < n and X.iloc[i+1]['champion'] == c:
-                return (X.iloc[i-1][col] + X.iloc[i+1][col]) / 2
-        for col in ('popularity', 'winrate', 'banrate'):
-            X[col] = X.reset_index().apply(fill, axis=1, args=(col,))
+    def fill_play(self, X: pandas.DataFrame):
+        cols = ['popularity','winrate','banrate']
+        cdfs = {}
+        def fill(row):
+            if not np.isnan(row[cols[0]]):
+                return [row[col] for col in cols]
+            d, c = row['date'], row['champion']
+            cdf = cdfs.setdefault(c, self.play_df[self.play_df['champion'] == c])
+            dates = np.array(cdf['date'])
+            ub = self.upper_bound(d, dates)
+            if ub < 0:
+                lb, ub = 0, 0
+            elif ub >= len(dates):
+                lb, ub = len(dates)-1, len(dates)-1
+            else:
+                lb = ub -1
+            return [(cdf.iloc[lb][col] + cdf.iloc[ub][col]) / 2 for col in cols]
+        X_ = X.apply(fill, axis=1, result_type='expand')
+        for i, col in enumerate(cols):
+            X[col] = X_[i]
         return X
 
     def with_total_skins(self, X):
